@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+attentionai/__init__.py
+attentionai/models.py
+attentionai/policy.py
+attentionai/privacy.py
+attentionai.egg-info/PKG-INFO
+attentionai.egg-info/SOURCES.txt
+attentionai.egg-info/dependency_links.txt
+attentionai.egg-info/requires.txt
+attentionai.egg-info/top_level.txt
+tests/test_policy.py
