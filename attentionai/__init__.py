@@ -2,7 +2,7 @@
 
 from .api import AttentionAIEngine, DictNotificationAdapter, JsonProfileStore
 from .models import Decision, NotificationEvent, UserContext, InteractionProfile
-from .policy import NotificationPolicy
+from .policy import NotificationPolicy, NotificationPolicyConfig
 from .privacy import hash_contact_id, sanitize_event
 
 __all__ = [
@@ -11,6 +11,7 @@ __all__ = [
     "UserContext",
     "InteractionProfile",
     "NotificationPolicy",
+    "NotificationPolicyConfig",
     "AttentionAIEngine",
     "DictNotificationAdapter",
     "JsonProfileStore",

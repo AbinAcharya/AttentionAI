@@ -9,9 +9,17 @@ def hash_contact_id(value: str) -> str:
 
 
 def sanitize_event(event: Any) -> Dict[str, Any]:
+    if isinstance(event, dict):
+        return {
+            "app_name": event.get("app_name"),
+            "sender_id": hash_contact_id(str(event.get("sender_id", ""))),
+            "content_length": len(str(event.get("content", ""))),
+            "timestamp": event.get("timestamp"),
+        }
+
     return {
-        "app_name": event.app_name,
-        "sender_id": hash_contact_id(event.sender_id),
-        "content_length": len(event.content or ""),
-        "timestamp": event.timestamp,
+        "app_name": getattr(event, "app_name", None),
+        "sender_id": hash_contact_id(str(getattr(event, "sender_id", ""))),
+        "content_length": len(str(getattr(event, "content", ""))),
+        "timestamp": getattr(event, "timestamp", None),
     }

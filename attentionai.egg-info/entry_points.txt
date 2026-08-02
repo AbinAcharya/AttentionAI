@@ -1,0 +1,2 @@
+[console_scripts]
+attentionai = attentionai.__main__:main

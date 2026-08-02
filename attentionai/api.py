@@ -4,38 +4,50 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .models import Decision, InteractionProfile, NotificationEvent, UserContext
+from .models import Decision, InteractionProfile, NotificationEvent
 from .policy import NotificationPolicy
 from .privacy import hash_contact_id
 
 
 class DictNotificationAdapter:
     def adapt(self, payload: Dict[str, Any]) -> NotificationEvent:
-        context_payload = payload.get("context") or {}
-        context = UserContext(
-            time_of_day=context_payload.get("time_of_day", "day"),
-            location_category=context_payload.get("location_category", "office"),
-            calendar_busy=bool(context_payload.get("calendar_busy", False)),
-            current_app=context_payload.get("current_app", "unknown"),
-            screen_on=bool(context_payload.get("screen_on", True)),
-            battery_level=int(context_payload.get("battery_level", 100)),
-            driving=bool(context_payload.get("driving", False)),
-            headphones_connected=bool(context_payload.get("headphones_connected", False)),
-            activity=context_payload.get("activity", "stationary"),
-        )
-        return NotificationEvent(
-            app_name=str(payload.get("app_name", "unknown")),
-            sender_id=str(payload.get("sender_id", "unknown")),
-            sender_name=payload.get("sender_name"),
-            content=str(payload.get("content", "")),
-            timestamp=payload.get("timestamp"),
-            context=context,
-        )
+        return NotificationEvent.from_dict({
+            "app_name": self._first_non_empty(payload, ["app_name", "application", "app"]),
+            "sender_id": self._first_non_empty(payload, ["sender_id", "senderId", "sender"]),
+            "sender_name": self._first_non_empty(payload, ["sender_name", "senderName", "name"]),
+            "content": self._first_non_empty(payload, ["content", "message", "body"]),
+            "timestamp": self._first_non_empty(payload, ["timestamp", "time", "sent_at"]),
+            "context": self._extract_context(payload),
+        })
+
+    def _first_non_empty(self, payload: Dict[str, Any], keys: list[str]) -> Optional[str]:
+        for key in keys:
+            value = payload.get(key)
+            if value is not None and value != "":
+                return str(value)
+        return None
+
+    def _extract_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if payload.get("context") and isinstance(payload["context"], dict):
+            return payload["context"]
+
+        return {
+            "time_of_day": payload.get("time_of_day"),
+            "location_category": payload.get("location_category"),
+            "calendar_busy": payload.get("calendar_busy"),
+            "current_app": payload.get("current_app"),
+            "screen_on": payload.get("screen_on"),
+            "battery_level": payload.get("battery_level"),
+            "driving": payload.get("driving"),
+            "headphones_connected": payload.get("headphones_connected"),
+            "activity": payload.get("activity"),
+        }
 
 
 class JsonProfileStore:
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, hash_sender_id: bool = False) -> None:
         self.path = Path(path)
+        self.hash_sender_id = hash_sender_id
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             self._load()
@@ -44,39 +56,35 @@ class JsonProfileStore:
             self._save()
 
     def _load(self) -> None:
-        with self.path.open("r", encoding="utf-8") as handle:
-            self._data = json.load(handle)
+        try:
+            with self.path.open("r", encoding="utf-8") as handle:
+                self._data = json.load(handle)
+        except (json.JSONDecodeError, OSError):
+            self._data = {}
+            self._save()
 
     def _save(self) -> None:
         with self.path.open("w", encoding="utf-8") as handle:
             json.dump(self._data, handle, indent=2)
 
+    def _normalize_sender_id(self, sender_id: str) -> str:
+        if self.hash_sender_id:
+            return hash_contact_id(sender_id)
+        return sender_id
+
     def get(self, sender_id: str) -> Optional[InteractionProfile]:
-        raw = self._data.get(sender_id)
+        key = self._normalize_sender_id(sender_id)
+        raw = self._data.get(key)
         if not raw:
             return None
-        return InteractionProfile(
-            sender_id=raw.get("sender_id", sender_id),
-            tier=int(raw.get("tier", 3)),
-            relationship_score=float(raw.get("relationship_score", 0.5)),
-            avg_response_time_seconds=float(raw.get("avg_response_time_seconds", 120.0)),
-            open_rate=float(raw.get("open_rate", 0.5)),
-            urgency_history=list(raw.get("urgency_history", [])),
-            last_interaction_days=int(raw.get("last_interaction_days", 365)),
-            manual_overrides=int(raw.get("manual_overrides", 0)),
-        )
+        return InteractionProfile.from_dict(raw)
 
     def save(self, profile: InteractionProfile) -> None:
-        self._data[profile.sender_id] = {
-            "sender_id": profile.sender_id,
-            "tier": profile.tier,
-            "relationship_score": profile.relationship_score,
-            "avg_response_time_seconds": profile.avg_response_time_seconds,
-            "open_rate": profile.open_rate,
-            "urgency_history": profile.urgency_history,
-            "last_interaction_days": profile.last_interaction_days,
-            "manual_overrides": profile.manual_overrides,
-        }
+        key = self._normalize_sender_id(profile.sender_id)
+        saved_profile = profile.to_dict()
+        if self.hash_sender_id:
+            saved_profile["sender_id"] = key
+        self._data[key] = saved_profile
         self._save()
 
 
@@ -88,11 +96,13 @@ class AttentionAIEngine:
     def process(self, payload: Dict[str, Any], adapter: Optional[DictNotificationAdapter] = None) -> Decision:
         adapter = adapter or DictNotificationAdapter()
         event = adapter.adapt(payload)
-        profile = None
-        if self.profile_store is not None:
-            profile = self.profile_store.get(event.sender_id)
+        return self.process_event(event)
+
+    def process_event(self, event: NotificationEvent) -> Decision:
+        profile = self.profile_store.get(event.sender_id) if self.profile_store is not None else None
         if profile is None:
             profile = InteractionProfile(sender_id=event.sender_id)
+
         decision = self.policy.analyze(event, profile)
         self._update_profile(profile, event, decision)
         return decision
@@ -103,18 +113,31 @@ class AttentionAIEngine:
         return self.profile_store.get(sender_id)
 
     def _update_profile(self, profile: InteractionProfile, event: NotificationEvent, decision: Decision) -> None:
-        profile.urgency_history.append(self._estimate_content_weight(event.content))
-        if decision.action == "interrupt":
-            profile.relationship_score = min(1.0, profile.relationship_score + 0.05)
-        elif decision.action == "defer":
-            profile.relationship_score = max(0.0, profile.relationship_score - 0.02)
+        profile.record_interaction(
+            urgency=event.estimate_urgency(),
+            responded=decision.is_interrupt(),
+        )
         if self.profile_store is not None:
             self.profile_store.save(profile)
 
-    def _estimate_content_weight(self, content: str) -> float:
-        lowered = (content or "").lower()
-        if any(word in lowered for word in ["emergency", "urgent", "call me", "help", "asap"]):
-            return 0.9
-        if any(word in lowered for word in ["hey", "how are you", "what's up"]):
-            return 0.2
-        return 0.5
+    def record_feedback(
+        self,
+        sender_id: str,
+        responded: bool,
+        response_time_seconds: Optional[float] = None,
+        override: bool = False,
+        days_since_last_interaction: int = 1,
+    ) -> Optional[InteractionProfile]:
+        if self.profile_store is None:
+            return None
+
+        profile = self.profile_store.get(sender_id) or InteractionProfile(sender_id=sender_id)
+        profile.record_interaction(
+            urgency=0.0,
+            responded=responded,
+            override=override,
+            response_time_seconds=response_time_seconds,
+            days_since_last_interaction=days_since_last_interaction,
+        )
+        self.profile_store.save(profile)
+        return profile
