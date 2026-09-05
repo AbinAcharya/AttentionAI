@@ -1,0 +1,369 @@
+{
+  "version": 1,
+  "now_ms": 1767225600000,
+  "notes": "Labelled behaviour corpus. Both the Python reference engine and the Android/Kotlin engine are tested against this exact file, so the two cannot silently drift. now_ms is fixed so results are deterministic. Profile ages are expressed as last_seen_days_ago and converted at load time.",
+  "scenarios": [
+    {
+      "id": "reunion-emergency",
+      "note": "The headline case: a once-close friend, silent for over two years, asking for help.",
+      "expect": "interrupt",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "old-friend",
+        "content": "I really need help, please call me"
+      },
+      "context": { "time_of_day": "night", "dnd_active": true, "screen_on": false },
+      "profile": {
+        "tier": 2,
+        "relationship_score": 0.8,
+        "peak_relationship": 0.85,
+        "lifetime_interactions": 240,
+        "response_count": 180,
+        "received_count": 220,
+        "last_seen_days_ago": 800
+      }
+    },
+    {
+      "id": "reunion-small-talk",
+      "note": "Same dormant friend, nothing actually wrong. Dormancy alone must not break through.",
+      "expect": "defer",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "old-friend",
+        "content": "happy new year! long time no see"
+      },
+      "context": { "time_of_day": "night", "dnd_active": true, "screen_on": false },
+      "profile": {
+        "tier": 2,
+        "relationship_score": 0.8,
+        "peak_relationship": 0.85,
+        "lifetime_interactions": 240,
+        "response_count": 180,
+        "received_count": 220,
+        "last_seen_days_ago": 800
+      }
+    },
+    {
+      "id": "dormant-stranger-urgent-words",
+      "note": "Spam wearing urgency vocabulary. Was collecting the reunion bonus in v1.",
+      "expect": "defer",
+      "event": {
+        "app_name": "SMS",
+        "sender_id": "promo-shortcode",
+        "content": "URGENT! Claim your prize now, limited time offer"
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": {
+        "tier": 5,
+        "relationship_score": 0.1,
+        "peak_relationship": 0.15,
+        "lifetime_interactions": 0,
+        "response_count": 0,
+        "received_count": 40,
+        "last_seen_days_ago": 900
+      }
+    },
+    {
+      "id": "dormant-stranger-genuine-words",
+      "note": "An unknown sender with no history does not get to break DND on wording alone.",
+      "expect": "defer",
+      "event": {
+        "app_name": "SMS",
+        "sender_id": "unknown-number",
+        "content": "emergency, please call me back"
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": {
+        "tier": 5,
+        "relationship_score": 0.2,
+        "peak_relationship": 0.2,
+        "lifetime_interactions": 0,
+        "received_count": 1
+      }
+    },
+    {
+      "id": "unknown-number-repeated-calls",
+      "note": "But five missed calls from that same unknown number is a real-world emergency pattern.",
+      "expect": "interrupt",
+      "event": {
+        "app_name": "Phone",
+        "sender_id": "unknown-number",
+        "content": "",
+        "is_missed_call": true
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": {
+        "tier": 5,
+        "relationship_score": 0.2,
+        "peak_relationship": 0.2,
+        "received_count": 5
+      },
+      "escalation": { "score": 1.0, "burst_count": 5, "call_count": 5, "override_factor": 1.0 }
+    },
+    {
+      "id": "partner-casual-at-night",
+      "note": "The v1 additive model let tier and relationship bonuses reach the threshold alone.",
+      "expect": "defer",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "partner",
+        "content": "lol ok goodnight"
+      },
+      "context": { "time_of_day": "sleep", "dnd_active": true, "screen_on": false },
+      "profile": {
+        "tier": 1,
+        "manual_tier": 1,
+        "relationship_score": 0.95,
+        "peak_relationship": 0.95,
+        "lifetime_interactions": 5000,
+        "response_count": 900,
+        "received_count": 1000,
+        "is_starred": true,
+        "is_contact": true,
+        "last_seen_days_ago": 0
+      }
+    },
+    {
+      "id": "partner-urgent-at-night",
+      "expect": "interrupt",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "partner",
+        "content": "I'm at the hospital, please call me"
+      },
+      "context": { "time_of_day": "sleep", "dnd_active": true, "screen_on": false },
+      "profile": {
+        "tier": 1,
+        "manual_tier": 1,
+        "relationship_score": 0.95,
+        "peak_relationship": 0.95,
+        "lifetime_interactions": 5000,
+        "response_count": 900,
+        "received_count": 1000,
+        "is_starred": true,
+        "is_contact": true,
+        "last_seen_days_ago": 0
+      }
+    },
+    {
+      "id": "close-contact-missed-call",
+      "note": "A single missed call from a starred contact during DND.",
+      "expect": "interrupt",
+      "event": {
+        "app_name": "Phone",
+        "sender_id": "mum",
+        "content": "",
+        "is_missed_call": true
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": {
+        "tier": 1,
+        "relationship_score": 0.9,
+        "peak_relationship": 0.9,
+        "lifetime_interactions": 1200,
+        "response_count": 400,
+        "received_count": 450,
+        "is_starred": true,
+        "is_contact": true,
+        "last_seen_days_ago": 2
+      }
+    },
+    {
+      "id": "negated-urgency",
+      "note": "\"no emergency\" is the opposite of an emergency. v1 scored it 1.0.",
+      "expect": "defer",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "friend",
+        "content": "no emergency, just checking in whenever you're free"
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": {
+        "tier": 2,
+        "relationship_score": 0.7,
+        "peak_relationship": 0.7,
+        "lifetime_interactions": 300,
+        "response_count": 100,
+        "received_count": 140,
+        "last_seen_days_ago": 1
+      }
+    },
+    {
+      "id": "burst-without-keywords",
+      "note": "\"are you awake\" three times in ten minutes. No keyword list would catch this.",
+      "expect": "interrupt",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "sibling",
+        "content": "are you awake"
+      },
+      "context": { "time_of_day": "sleep", "dnd_active": true, "screen_on": false },
+      "profile": {
+        "tier": 2,
+        "relationship_score": 0.8,
+        "peak_relationship": 0.85,
+        "lifetime_interactions": 900,
+        "response_count": 300,
+        "received_count": 340,
+        "is_contact": true,
+        "last_seen_days_ago": 3
+      },
+      "escalation": { "score": 0.75, "burst_count": 4, "call_count": 0, "override_factor": 0.0 }
+    },
+    {
+      "id": "group-chat-no-mention",
+      "expect": "defer",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "colleague",
+        "content": "urgent, we need to fix the deploy",
+        "is_group": true,
+        "mentions_user": false
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": {
+        "tier": 3,
+        "relationship_score": 0.5,
+        "peak_relationship": 0.5,
+        "lifetime_interactions": 60,
+        "response_count": 40,
+        "received_count": 120,
+        "last_seen_days_ago": 1
+      }
+    },
+    {
+      "id": "colleague-urgent-in-meeting",
+      "note": "Work urgency from a mid-tier contact while the user is in a meeting.",
+      "expect": "show_silently",
+      "event": {
+        "app_name": "Slack",
+        "sender_id": "manager",
+        "content": "this is urgent, can you look now"
+      },
+      "context": {
+        "time_of_day": "day",
+        "location_category": "meeting",
+        "calendar_busy": true,
+        "dnd_active": true
+      },
+      "profile": {
+        "tier": 2,
+        "relationship_score": 0.65,
+        "peak_relationship": 0.7,
+        "lifetime_interactions": 400,
+        "response_count": 200,
+        "received_count": 260,
+        "is_contact": true,
+        "last_seen_days_ago": 1
+      }
+    },
+    {
+      "id": "muted-sender-urgent",
+      "note": "Muting is the user's explicit instruction; it downgrades but the override still exists.",
+      "expect": "show_silently",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "noisy-person",
+        "content": "emergency please help me right now"
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": {
+        "tier": 2,
+        "relationship_score": 0.8,
+        "peak_relationship": 0.8,
+        "lifetime_interactions": 200,
+        "response_count": 60,
+        "received_count": 90,
+        "muted": true,
+        "last_seen_days_ago": 1
+      }
+    },
+    {
+      "id": "ongoing-media-notification",
+      "note": "Media controls and sync bars are not conversations.",
+      "expect": "defer",
+      "event": {
+        "app_name": "Spotify",
+        "sender_id": "spotify",
+        "content": "Now playing",
+        "is_ongoing": true
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": { "tier": 5 }
+    },
+    {
+      "id": "group-summary-notification",
+      "expect": "defer",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "summary",
+        "content": "12 new messages",
+        "is_group_summary": true
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": { "tier": 3 }
+    },
+    {
+      "id": "hinglish-emergency",
+      "note": "Romanised Hindi is how a lot of this traffic is actually written.",
+      "expect": "interrupt",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "cousin",
+        "content": "bhai emergency hai, jaldi call me"
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": {
+        "tier": 2,
+        "relationship_score": 0.7,
+        "peak_relationship": 0.75,
+        "lifetime_interactions": 300,
+        "response_count": 120,
+        "received_count": 160,
+        "is_contact": true,
+        "last_seen_days_ago": 20
+      }
+    },
+    {
+      "id": "moderately-close-mild-request",
+      "note": "A friend asking a normal favour at night. Worth seeing later, not worth waking for.",
+      "expect": "defer",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "friend",
+        "content": "hey can you send me that file tomorrow please"
+      },
+      "context": { "time_of_day": "night", "dnd_active": true },
+      "profile": {
+        "tier": 3,
+        "relationship_score": 0.55,
+        "peak_relationship": 0.6,
+        "lifetime_interactions": 120,
+        "response_count": 70,
+        "received_count": 130,
+        "is_contact": true,
+        "last_seen_days_ago": 2
+      }
+    },
+    {
+      "id": "dormant-acquaintance-mild",
+      "note": "Dormant but never close, and nothing urgent. Must stay quiet.",
+      "expect": "defer",
+      "event": {
+        "app_name": "Instagram",
+        "sender_id": "acquaintance",
+        "content": "hey, how are you?"
+      },
+      "context": { "time_of_day": "day", "dnd_active": true },
+      "profile": {
+        "tier": 4,
+        "relationship_score": 0.25,
+        "peak_relationship": 0.3,
+        "lifetime_interactions": 3,
+        "response_count": 1,
+        "received_count": 8,
+        "last_seen_days_ago": 400
+      }
+    }
+  ]
+}

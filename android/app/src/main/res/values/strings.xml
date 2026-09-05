@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AttentionAI</string>
+    <string name="service_label">AttentionAI notification filter</string>
+
+    <string name="channel_breakthrough_name">Breakthroughs</string>
+    <string name="channel_breakthrough_description">
+        Messages judged important enough to reach you during Do Not Disturb.
+    </string>
+    <string name="channel_status_name">Status</string>
+    <string name="channel_status_description">Quiet status and diagnostics.</string>
+
+    <string name="action_not_important">Not important</string>
+    <string name="action_always_allow">Always allow</string>
+
+    <string name="unknown_sender">Unknown</string>
+
+    <string name="toast_demoted">Lowered this sender\'s priority</string>
+    <string name="toast_promoted">This sender will always break through</string>
+
+    <string name="test_sender">AttentionAI test</string>
+    <string name="test_message">If you can hear this during Do Not Disturb, breakthroughs are working.</string>
+</resources>

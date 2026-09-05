@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Deliberately a platform theme rather than a Material Components one: Compose
+      supplies all the colour and typography, so pulling in the com.google.android.material
+      dependency purely to name a parent theme would be dead weight.
+    -->
+    <style name="Theme.AttentionAI" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">?android:attr/colorBackground</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

@@ -1,129 +1,331 @@
+"""The decision policy.
+
+Structural change from v1: the score is **multiplicative**, not a flat weighted sum.
+
+    score = need x affinity x context_factor        (and then max'd with an override)
+
+``need`` is what the message itself demands. ``affinity`` is how much this particular
+sender is allowed to demand it. Multiplying means a beloved contact sending "lol ok"
+can never break through at 3am, no matter how high their relationship score is --
+which the old additive model got wrong, because tier and relationship bonuses stacked
+onto the same axis as urgency and could reach the threshold on their own.
+
+The reunion term is the piece that handles "someone who hasn't texted in two years
+suddenly needs help":
+
+* it is **multiplied by need**, so silence followed by "happy new year" stays quiet
+  while silence followed by "I need help" spikes;
+* it is **gated on peak_relationship / lifetime_interactions**, so it only ever
+  applies to people who were once actually close. A dormant stranger is just a
+  stranger, which is what stops spam from collecting the reunion bonus.
+"""
+
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from .models import Decision, InteractionProfile, NotificationEvent, UserContext
+__all__ = ["PolicyConfig", "NotificationPolicy", "NotificationPolicyConfig"]
+
+from .escalation import EscalationSignal
+from .models import (
+    DEFER,
+    INTERRUPT,
+    SHOW_SILENTLY,
+    Decision,
+    InteractionProfile,
+    NotificationEvent,
+    UserContext,
+    clamp01,
+    now_ms,
+)
+from .urgency import UrgencyConfig, UrgencySignal, score_text
 
 
 @dataclass
-class NotificationPolicyConfig:
-    urgency_keywords: Dict[str, float] = field(default_factory=lambda: {
-        "urgent": 0.8,
-        "emergency": 1.0,
-        "help": 0.9,
-        "call me": 0.9,
-        "please": 0.2,
-        "asap": 0.8,
-        "now": 0.6,
-    })
-    urgency_weight: float = 0.6
-    relationship_weight: float = 0.15
-    tier_bonus_multiplier: float = 0.08
-    open_rate_weight: float = 0.05
-    average_urgency_weight: float = 0.05
-    context_penalty_multiplier: float = 0.5
-    dormancy_bonus: float = 0.15
-    dormancy_threshold_days: int = 700
-    urgency_boost_threshold: float = 0.8
-    urgency_boost_amount: float = 0.15
-    interrupt_threshold: float = 0.75
-    show_silently_threshold: float = 0.45
+class PolicyConfig:
+    # --- bond: how much this sender is allowed to demand attention
+    # The first three weights sum to 1; `w_starred` is a bonus on top rather than a
+    # slice of the budget, so that a tier-2 contact is not permanently capped below
+    # a starred one.
+    w_relationship: float = 0.45
+    w_tier: float = 0.35
+    w_open_rate: float = 0.20
+    w_starred: float = 0.10
+
+    # --- affinity assembly
+    affinity_base: float = 0.15        # floor, so an unknown sender is not exactly zero
+    affinity_bond_weight: float = 0.85
+    # Diminishing returns on closeness: past a point, "very close" and "extremely
+    # close" should behave the same. Without this, realistic bonds (~0.7) map to
+    # affinities too low for a genuine emergency to clear the threshold.
+    bond_curve: float = 0.7
+    reunion_weight: float = 0.55
+
+    # --- reunion gating
+    reunion_min_days: float = 30.0     # below this, no dormancy credit at all
+    reunion_full_days: float = 180.0   # at/above this, full dormancy credit
+    reunion_peak_threshold: float = 0.5
+    reunion_min_lifetime: int = 20
+
+    # --- relationship decay
+    relationship_half_life_days: float = 90.0
+    relationship_floor: float = 0.15
+
+    # --- context
+    context_damping: float = 0.45      # max fraction of score removed by context
+    penalty_calendar_busy: float = 0.25
+    penalty_meeting: float = 0.30
+    penalty_driving: float = 0.35
+    # Night penalties are deliberately mild. `need` already suppresses small talk
+    # multiplicatively, and 3am is precisely when a real emergency must get through.
+    penalty_night: float = 0.12
+    penalty_sleep: float = 0.20
+    penalty_low_battery: float = 0.10
+    low_battery_level: int = 15
+    max_context_penalty: float = 0.80
+
+    # --- message kinds
+    missed_call_need: float = 0.85     # a missed call is a strong request by itself
+    group_without_mention_damping: float = 0.40
+
+    # --- emergency override (repeated calls from anyone, known or not)
+    override_enabled: bool = True
+    override_max: float = 0.85
+
+    # --- thresholds
+    interrupt_threshold: float = 0.70
+    silent_threshold: float = 0.40
+
+    urgency: UrgencyConfig = field(default_factory=UrgencyConfig)
+
+
+def _tier_weight(tier: int) -> float:
+    """Tier 1 -> 1.0, tier 5 -> 0.0."""
+    return clamp01((5 - max(1, min(5, tier))) / 4.0)
 
 
 class NotificationPolicy:
-    def __init__(self, config: Optional[NotificationPolicyConfig] = None) -> None:
-        self.config = config or NotificationPolicyConfig()
-        self.urgency_keywords = self.config.urgency_keywords
+    """Stateless scorer. All state lives in the profile, tracker, and budget."""
 
-    def analyze(self, event: NotificationEvent, profile: Optional[InteractionProfile] = None) -> Decision:
-        urgency_score = event.estimate_urgency(self.urgency_keywords)
+    def __init__(self, config: Optional[PolicyConfig] = None) -> None:
+        self.config = config or PolicyConfig()
 
-        if profile is None:
-            profile = InteractionProfile(sender_id=event.sender_id)
+    # ---- public API ----------------------------------------------------------
 
-        relationship_score = profile.relationship_score
-        tier_bonus = self.config.tier_bonus_multiplier * max(0, 5 - profile.tier)
-        open_rate_bonus = profile.open_rate * self.config.open_rate_weight
-        average_urgency_bonus = profile.average_urgency * self.config.average_urgency_weight
-        context_penalty = self._context_penalty(event.context)
-        dormancy_bonus = 0.0
+    def analyze(
+        self,
+        event: NotificationEvent,
+        profile: Optional[InteractionProfile] = None,
+        escalation: Optional[EscalationSignal] = None,
+        at_ms: Optional[int] = None,
+    ) -> Decision:
+        config = self.config
+        at_ms = at_ms if at_ms is not None else now_ms()
+        profile = profile or InteractionProfile(sender_key=event.sender_id)
+        escalation = escalation or EscalationSignal()
+        context = event.context or UserContext()
 
-        if profile.last_interaction_days > self.config.dormancy_threshold_days:
-            dormancy_bonus = self.config.dormancy_bonus
+        # Media controls, sync bars and group summaries are not conversations.
+        if event.is_ongoing or event.is_group_summary:
+            return Decision(
+                action=DEFER,
+                priority_score=0.0,
+                reasons=["not a conversational notification"],
+                suppressed_by="non_conversational",
+            )
 
-        score = (
-            urgency_score * self.config.urgency_weight
-            + relationship_score * self.config.relationship_weight
-            + tier_bonus
-            + open_rate_bonus
-            + average_urgency_bonus
-            + dormancy_bonus
+        urgency = score_text(event.content, config.urgency)
+        need = self._need(event, urgency, escalation)
+        bond, bond_parts = self._bond(profile, at_ms)
+        reunion = self._reunion(profile, at_ms)
+        shaped_bond = bond ** config.bond_curve if bond > 0 else 0.0
+        affinity = clamp01(
+            config.affinity_base
+            + config.affinity_bond_weight * shaped_bond
+            + config.reunion_weight * reunion * need
         )
-        score -= context_penalty * self.config.context_penalty_multiplier
+        penalty = self._context_penalty(context)
+        context_factor = 1.0 - config.context_damping * penalty
 
-        if urgency_score >= self.config.urgency_boost_threshold:
-            score += self.config.urgency_boost_amount
+        score = clamp01(need * affinity * context_factor)
 
-        score = self._clamp(score)
+        override = 0.0
+        if config.override_enabled and escalation.override_factor > 0.0:
+            override = clamp01(escalation.override_factor * config.override_max)
+            score = max(score, override)
 
-        reasons: List[str] = []
-        if urgency_score >= self.config.urgency_boost_threshold:
-            reasons.append("high urgency content")
-        if relationship_score > 0.7:
-            reasons.append("strong sender relationship")
-        if profile.last_interaction_days > self.config.dormancy_threshold_days:
-            reasons.append("dormancy break detected")
-        if context_penalty > 0.2:
-            reasons.append("context suggests deferral")
+        reasons = self._reasons(
+            urgency=urgency,
+            escalation=escalation,
+            profile=profile,
+            reunion=reunion,
+            penalty=penalty,
+            override=override,
+            event=event,
+            at_ms=at_ms,
+        )
 
-        action = self._action_from_score(score)
-        return Decision(action=action, priority_score=score, reasons=reasons)
+        components = {
+            "need": round(need, 4),
+            "urgency": round(urgency.score, 4),
+            "escalation": round(escalation.score, 4),
+            "bond": round(bond, 4),
+            "reunion": round(reunion, 4),
+            "affinity": round(affinity, 4),
+            "context_penalty": round(penalty, 4),
+            "override": round(override, 4),
+            **{key: round(value, 4) for key, value in bond_parts.items()},
+        }
 
-    def _estimate_urgency(self, content: str) -> float:
-        lowered = content.lower()
-        score = 0.0
-        for keyword, weight in self.urgency_keywords.items():
-            if keyword in lowered:
-                score = max(score, weight)
+        # A muted sender is held back one step: only the emergency override
+        # (repeated calls) can still produce a real interrupt.
+        if profile.muted:
+            if score >= config.interrupt_threshold:
+                action = INTERRUPT if override > 0.0 else SHOW_SILENTLY
+            else:
+                action = DEFER
+            return Decision(
+                action=action,
+                priority_score=score,
+                reasons=reasons + ["sender is muted"],
+                components=components,
+                suppressed_by=None if action == INTERRUPT else "muted",
+            )
 
-        if re.search(r"\b(call|call me|urgent|emergency|help|asap|now)\b", lowered):
-            score = max(score, 0.7)
+        return Decision(
+            action=self._action_for(score),
+            priority_score=score,
+            reasons=reasons,
+            components=components,
+        )
 
-        if score == 0.0:
-            return 0.2
-        return min(1.0, score)
+    # ---- scoring pieces ------------------------------------------------------
 
-    def _context_penalty(self, context: Optional[UserContext]) -> float:
-        if context is None:
+    def _need(
+        self,
+        event: NotificationEvent,
+        urgency: UrgencySignal,
+        escalation: EscalationSignal,
+    ) -> float:
+        """How strongly the message itself asks for attention.
+
+        Urgency and escalation combine as a probabilistic OR: either alone can carry
+        the message, and having both saturates rather than overflows.
+        """
+        need = urgency.score + escalation.score * (1.0 - urgency.score)
+
+        if event.is_missed_call:
+            need = max(need, self.config.missed_call_need)
+
+        if event.is_group and not event.mentions_user:
+            need *= self.config.group_without_mention_damping
+
+        return clamp01(need)
+
+    def _bond(self, profile: InteractionProfile, at_ms: int) -> Tuple[float, Dict[str, float]]:
+        config = self.config
+        relationship = profile.decayed_relationship(
+            at_ms,
+            half_life_days=config.relationship_half_life_days,
+            floor=config.relationship_floor,
+        )
+        tier = _tier_weight(profile.effective_tier)
+        starred = 1.0 if (profile.is_starred or profile.effective_tier == 1) else 0.0
+
+        bond = clamp01(
+            config.w_relationship * relationship
+            + config.w_tier * tier
+            + config.w_open_rate * profile.open_rate
+            + config.w_starred * starred
+        )
+        return bond, {
+            "relationship_decayed": relationship,
+            "tier_weight": tier,
+            "open_rate": profile.open_rate,
+            "bond_shaped": bond ** config.bond_curve if bond > 0 else 0.0,
+        }
+
+    def _reunion(self, profile: InteractionProfile, at_ms: int) -> float:
+        """Dormancy credit, but only for people who were once close.
+
+        Returns a 0..1 ramp. The caller multiplies it by ``need`` so that a long
+        silence broken by small talk earns nothing.
+        """
+        config = self.config
+        if not profile.is_established(config.reunion_peak_threshold, config.reunion_min_lifetime):
             return 0.0
 
+        days = profile.days_since_last_seen(at_ms)
+        span = config.reunion_full_days - config.reunion_min_days
+        if span <= 0:
+            return 1.0 if days >= config.reunion_full_days else 0.0
+        return clamp01((days - config.reunion_min_days) / span)
+
+    def _context_penalty(self, context: UserContext) -> float:
+        config = self.config
         penalty = 0.0
         if context.calendar_busy:
-            penalty += 0.2
-        if context.driving:
-            penalty += 0.3
-        if context.time_of_day in {"sleep", "night"}:
-            penalty += 0.25
+            penalty += config.penalty_calendar_busy
         if context.location_category == "meeting":
-            penalty += 0.2
-        if not context.screen_on:
-            penalty += 0.1
-        if context.battery_level < 20:
-            penalty += 0.1
-        if context.activity in {"running", "walking", "biking"}:
-            penalty += 0.1
-        if context.headphones_connected:
-            penalty += 0.05
-        return min(0.8, penalty)
+            penalty += config.penalty_meeting
+        if context.driving:
+            penalty += config.penalty_driving
+        if context.time_of_day == "sleep":
+            penalty += config.penalty_sleep
+        elif context.time_of_day == "night":
+            penalty += config.penalty_night
+        if context.battery_level < config.low_battery_level:
+            penalty += config.penalty_low_battery
+        # Screen state is deliberately not penalised: during DND the screen is off by
+        # definition, and that is exactly when a breakthrough matters most.
+        return min(config.max_context_penalty, penalty)
 
-    def _action_from_score(self, score: float) -> str:
+    def _action_for(self, score: float) -> str:
         if score >= self.config.interrupt_threshold:
-            return "interrupt"
-        if score >= self.config.show_silently_threshold:
-            return "show_silently"
-        return "defer"
+            return INTERRUPT
+        if score >= self.config.silent_threshold:
+            return SHOW_SILENTLY
+        return DEFER
 
-    def _clamp(self, value: float) -> float:
-        return max(0.0, min(1.0, value))
+    def _reasons(
+        self,
+        urgency: UrgencySignal,
+        escalation: EscalationSignal,
+        profile: InteractionProfile,
+        reunion: float,
+        penalty: float,
+        override: float,
+        event: NotificationEvent,
+        at_ms: int,
+    ) -> List[str]:
+        reasons: List[str] = []
+        if urgency.score >= 0.7:
+            reasons.append("message reads as urgent")
+        if urgency.negated and urgency.score < 0.4:
+            reasons.append("urgent wording appears negated")
+        if urgency.spam_penalty >= 0.5:
+            reasons.append("promotional wording detected")
+        if escalation.score >= 0.4:
+            reasons.append(f"repeated contact ({escalation.burst_count} in 10 min)")
+        if event.is_missed_call:
+            reasons.append("missed call")
+        if override > 0.0:
+            reasons.append(f"repeated calls ({escalation.call_count})")
+        if reunion >= 0.5:
+            reasons.append(
+                f"close contact resurfacing after {int(profile.days_since_last_seen(at_ms))} days"
+                if profile.last_seen_ms
+                else "close contact resurfacing"
+            )
+        if profile.effective_tier <= 2 or profile.is_starred:
+            reasons.append("priority contact")
+        if event.is_group and not event.mentions_user:
+            reasons.append("group message without a mention")
+        if penalty >= 0.3:
+            reasons.append("context suggests deferring")
+        return reasons
+
+
+# Backwards-compatible alias for the old name.
+NotificationPolicyConfig = PolicyConfig

@@ -1,0 +1,37 @@
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Local runtime data (never commit learned profiles) -------------------
+profiles.json
+
+# --- Android ---------------------------------------------------------------
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/
+android/.kotlin/
+*.apk
+*.aab
+*.ap_
+
+# --- IDE / editor ----------------------------------------------------------
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# --- Claude Code session state --------------------------------------------
+.claude/plans/

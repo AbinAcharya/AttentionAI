@@ -1,0 +1,4 @@
+# Normalise line endings: LF on disk for everything text, CRLF only for Windows batch.
+* text=auto eol=lf
+
+*.bat text eol=crlf
