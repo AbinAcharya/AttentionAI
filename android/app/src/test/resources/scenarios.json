@@ -65,8 +65,8 @@
     },
     {
       "id": "dormant-stranger-genuine-words",
-      "note": "An unknown sender with no history does not get to break DND on wording alone.",
-      "expect": "defer",
+      "note": "An unknown sender with no history still breaks through on critical wording: the override deliberately ignores affinity.",
+      "expect": "interrupt",
       "event": {
         "app_name": "SMS",
         "sender_id": "unknown-number",
@@ -259,8 +259,8 @@
     },
     {
       "id": "muted-sender-urgent",
-      "note": "Muting is the user's explicit instruction; it downgrades but the override still exists.",
-      "expect": "show_silently",
+      "note": "Muting downgrades, but critical wording still triggers the override -- the same as repeated calls.",
+      "expect": "interrupt",
       "event": {
         "app_name": "WhatsApp",
         "sender_id": "noisy-person",
@@ -363,6 +363,44 @@
         "response_count": 1,
         "received_count": 8,
         "last_seen_days_ago": 400
+      }
+    },
+    {
+      "id": "terse-help-close",
+      "note": "A close contact sends just 'help': a one-word plea must break through DND.",
+      "expect": "interrupt",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "mom",
+        "content": "help"
+      },
+      "context": { "time_of_day": "night", "dnd_active": true, "screen_on": false },
+      "profile": {
+        "tier": 1,
+        "relationship_score": 0.8,
+        "peak_relationship": 0.85,
+        "lifetime_interactions": 120,
+        "response_count": 90,
+        "received_count": 110,
+        "last_seen_days_ago": 1
+      }
+    },
+    {
+      "id": "terse-help-stranger",
+      "note": "A brand-new sender types 'help': the critical override ignores affinity, so it breaks through.",
+      "expect": "interrupt",
+      "event": {
+        "app_name": "WhatsApp",
+        "sender_id": "unknown-number",
+        "content": "help"
+      },
+      "context": { "time_of_day": "night", "dnd_active": true, "screen_on": false },
+      "profile": {
+        "tier": 5,
+        "relationship_score": 0.15,
+        "peak_relationship": 0.15,
+        "lifetime_interactions": 0,
+        "last_seen_days_ago": 0
       }
     }
   ]

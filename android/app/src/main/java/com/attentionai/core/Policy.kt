@@ -68,6 +68,10 @@ data class PolicyConfig(
     // --- emergency override (repeated calls from anyone, known or not)
     val overrideEnabled: Boolean = true,
     val overrideMax: Double = 0.85,
+    // Critical wording ("help", "emergency", ...) bypasses affinity entirely, so a
+    // one-word plea from a stranger still breaks through DND. Only overrides the mute
+    // the same way repeated calls do: explicit instructions downgrade, never silence.
+    val criticalOverride: Double = 0.85,
 
     // --- thresholds
     val interruptThreshold: Double = 0.70,
@@ -112,13 +116,21 @@ class NotificationPolicy(val config: PolicyConfig = PolicyConfig()) {
 
         var score = clamp01(need * affinity * contextFactor)
 
-        var override = 0.0
-        if (config.overrideEnabled && escalation.overrideFactor > 0.0) {
-            override = clamp01(escalation.overrideFactor * config.overrideMax)
-            score = maxOf(score, override)
+        var escalationOverride = 0.0
+        var criticalOverride = 0.0
+        val criticalHits = urgency.matched.filter { it in config.urgency.criticalTerms }
+        if (config.overrideEnabled) {
+            if (escalation.overrideFactor > 0.0) {
+                escalationOverride = clamp01(escalation.overrideFactor * config.overrideMax)
+            }
+            if (criticalHits.isNotEmpty()) {
+                criticalOverride = clamp01(config.criticalOverride)
+            }
         }
+        val override = maxOf(escalationOverride, criticalOverride)
+        score = maxOf(score, override)
 
-        val reasons = reasons(urgency, escalation, senderProfile, reunion, penalty, override, event, atMs)
+        val reasons = reasons(urgency, escalation, senderProfile, reunion, penalty, escalationOverride, criticalHits, event, atMs)
         val components = buildMap {
             put("need", need)
             put("urgency", urgency.score)
@@ -131,8 +143,8 @@ class NotificationPolicy(val config: PolicyConfig = PolicyConfig()) {
             putAll(bondParts)
         }
 
-        // A muted sender is held back one step: only the emergency override
-        // (repeated calls) can still produce a real interrupt.
+        // A muted sender is held back one step: only an override -- repeated calls or
+        // critical wording -- can still produce a real interrupt.
         if (senderProfile.muted) {
             val action = if (score >= config.interruptThreshold) {
                 if (override > 0.0) Action.INTERRUPT else Action.SHOW_SILENTLY
@@ -232,16 +244,18 @@ class NotificationPolicy(val config: PolicyConfig = PolicyConfig()) {
         profile: SenderProfile,
         reunion: Double,
         penalty: Double,
-        override: Double,
+        escalationOverride: Double,
+        criticalHits: List<String>,
         event: NotificationEvent,
         atMs: Long,
     ): List<String> = buildList {
+        if (criticalHits.isNotEmpty()) add("critical wording (" + criticalHits.joinToString(", ") + ")")
         if (urgency.score >= 0.7) add("message reads as urgent")
         if (urgency.negated.isNotEmpty() && urgency.score < 0.4) add("urgent wording appears negated")
         if (urgency.spamPenalty >= 0.5) add("promotional wording detected")
         if (escalation.score >= 0.4) add("repeated contact (${escalation.burstCount} in 10 min)")
         if (event.isMissedCall) add("missed call")
-        if (override > 0.0) add("repeated calls (${escalation.callCount})")
+        if (escalationOverride > 0.0) add("repeated calls (${escalation.callCount})")
         if (reunion >= 0.5) {
             val days = profile.daysSinceLastSeen(atMs).toInt()
             add(if (profile.lastSeenMs > 0) "close contact resurfacing after $days days" else "close contact resurfacing")

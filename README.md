@@ -35,6 +35,12 @@ through:
   silence (gated so dormant strangers get nothing).
 - `context` — your situation: time of day, driving, meeting, battery, DND.
 
+If the message carries **critical wording** — an un-negated "help", "emergency", "sos"
+(or the romanised-Hindi/Devanagari equivalents) — affinity is bypassed entirely and the
+message interrupts from anyone, even an unknown number or a muted sender. That mirrors
+the existing repeated-calls override; ambiguous words ("urgent", "police", "fire",
+"hospital") are deliberately excluded so normal and automated traffic does not trip it.
+
 Anything that clears the threshold still has to pass the **interrupt budget** — an
 hourly cap, a per-sender cooldown, and duplicate suppression — unless its score is high
 enough to count as a real emergency.

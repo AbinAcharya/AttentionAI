@@ -76,22 +76,49 @@ def test_dormant_close_friend_making_small_talk_does_not_interrupt() -> None:
 
 
 def test_reunion_bonus_requires_prior_closeness() -> None:
-    """A dormant stranger is just a stranger -- this is the anti-spam gate."""
+    """A dormant stranger is just a stranger -- this is the anti-spam gate.
+
+    Uses urgent-but-not-critical wording ("urgent" is deliberately excluded from
+    the critical set), so this stays a pure affinity/reunion test.
+    """
     policy = NotificationPolicy()
     never_close = stranger(
         peak_relationship=0.2,
         lifetime_interactions=0,
         last_seen_ms=days_ago(900),
     )
-    decision = policy.analyze(event("emergency, call me now"), never_close, at_ms=NOW)
+    decision = policy.analyze(event("call me now, it is urgent"), never_close, at_ms=NOW)
 
     assert decision.components["reunion"] == 0.0
     assert decision.action != "interrupt"
 
 
-def test_reunion_ramps_with_dormancy() -> None:
+def test_critical_wording_overrides_affinity_for_a_stranger() -> None:
+    """"help me" from someone the app has never met still breaks through DND."""
     policy = NotificationPolicy()
-    message = event("I really need help, please call me")
+    for content in ("help", "help me", "need help"):
+        decision = policy.analyze(event(content), stranger(), at_ms=NOW)
+        assert decision.action == "interrupt", content
+        assert any("critical wording" in reason for reason in decision.reasons)
+
+
+def test_negated_critical_wording_does_not_override() -> None:
+    """"no help needed" is not a plea: the override must not fire on negations."""
+    policy = NotificationPolicy()
+    for content in ("no help needed, just checking in", "i do not need help"):
+        decision = policy.analyze(event(content), stranger(), at_ms=NOW)
+        assert decision.action != "interrupt", content
+
+
+def test_reunion_ramps_with_dormancy() -> None:
+    """Dormancy credit mounts with silence -- for non-critical wording.
+
+    Critical wording now short-circuits at the override ceiling (0.85), which
+    would flatten every point on this ramp, so the plea here stays non-critical
+    to keep the ramp observable.
+    """
+    policy = NotificationPolicy()
+    message = event("please call me, it is urgent")
 
     recent = score(policy, message, close_friend(last_seen_ms=days_ago(5)))
     medium = score(policy, message, close_friend(last_seen_ms=days_ago(100)))
@@ -125,8 +152,9 @@ def test_closeness_alone_never_interrupts() -> None:
 
 
 def test_urgent_wording_alone_does_not_interrupt_from_a_stranger() -> None:
+    """Affinity gates plain urgency: "urgent" is not a critical plea."""
     policy = NotificationPolicy()
-    decision = policy.analyze(event("EMERGENCY! call me right now"), stranger(), at_ms=NOW)
+    decision = policy.analyze(event("URGENT! call me right now"), stranger(), at_ms=NOW)
     assert decision.action != "interrupt"
 
 
@@ -194,14 +222,22 @@ def test_group_message_without_mention_is_damped() -> None:
 
 
 def test_muted_sender_is_held_back_one_step() -> None:
+    """"call me back, it is urgent" would interrupt un-muted; muting holds it back."""
     policy = NotificationPolicy()
     decision = policy.analyze(
-        event("emergency please help me right now"),
+        event("call me back, it is urgent"),
         close_friend(muted=True),
         at_ms=NOW,
     )
     assert decision.action == "show_silently"
     assert decision.suppressed_by == "muted"
+
+
+def test_critical_wording_from_a_muted_sender_interrupts() -> None:
+    """Muting downgrades normal traffic; a critical plea overrides even that."""
+    policy = NotificationPolicy()
+    decision = policy.analyze(event("help me"), close_friend(muted=True), at_ms=NOW)
+    assert decision.action == "interrupt"
 
 
 def test_muted_sender_can_still_reach_the_override() -> None:

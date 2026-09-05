@@ -510,10 +510,11 @@ class TestPolicy:
 
     def test_muted_sender_suppressed(self):
         policy = NotificationPolicy()
-        event = _make_event(content="emergency")
+        # "urgent" is non-critical: a muted sender is held back one step from interrupt.
+        event = _make_event(content="this is urgent, call me please")
         profile = _make_profile(tier=1, muted=True, relationship_score=0.9)
         decision = policy.analyze(event, profile, at_ms=NOW_MS)
-        # Muted sender should not get interrupt (unless override)
+        # Muted sender should not get interrupt (unless critical wording or override)
         assert not decision.is_interrupt()
         assert "sender is muted" in decision.reasons
 

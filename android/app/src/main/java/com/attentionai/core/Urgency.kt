@@ -36,6 +36,7 @@ object UrgencyTerms {
         "need your help" to 0.85,
         "please help" to 0.9,
         "help me" to 0.9,
+        "help" to 0.9,   // terse appeals match "help me"; affinity still gates the sender
         "sos" to 1.0,
         // time pressure
         "urgent" to 0.8,
@@ -59,7 +60,6 @@ object UrgencyTerms {
         "मदद" to 0.9,
         "जल्दी" to 0.7,
         // standalone words that are only mildly informative
-        "help" to 0.6,
         "please" to 0.15,
         "important" to 0.4,
         "problem" to 0.35,
@@ -88,6 +88,28 @@ object UrgencyTerms {
         "credit card" to 0.5,
     )
 
+    /**
+     * Un-negated matches here bypass affinity entirely: even a stranger's one-word
+     * "help" breaks through DND. Excludes ambiguous words ("urgent", "police", "fire",
+     * "hospital") so normal and automated traffic does not trip it.
+     */
+    val CRITICAL: Set<String> = setOf(
+        "help",
+        "help me",
+        "please help",
+        "i need help",
+        "need your help",
+        "emergency",
+        "emergency hai",
+        "sos",
+        "ambulance",
+        "accident",
+        "bleeding",
+        "madad",
+        "आपातकाल",
+        "मदद",
+    )
+
     /** Tokens that flip an urgency term appearing shortly after them. */
     val NEGATORS: Set<String> = setOf(
         "no", "not", "nope", "never", "nothing", "isnt", "isn't", "arent", "aren't",
@@ -100,6 +122,7 @@ data class UrgencyConfig(
     val terms: Map<String, Double> = UrgencyTerms.DEFAULT,
     val spamTerms: Map<String, Double> = UrgencyTerms.SPAM,
     val negators: Set<String> = UrgencyTerms.NEGATORS,
+    val criticalTerms: Set<String> = UrgencyTerms.CRITICAL,
     val shoutingBonus: Double = 0.10,
     val exclamationBonus: Double = 0.05,
     val questionBonus: Double = 0.05,
@@ -113,6 +136,7 @@ data class UrgencySignal(
     val matched: List<String> = emptyList(),
     val negated: List<String> = emptyList(),
     val spamPenalty: Double = 0.0,
+    val isCritical: Boolean = false,
 )
 
 object Urgency {
@@ -177,6 +201,7 @@ object Urgency {
             matched = matched.sorted(),
             negated = negated.sorted(),
             spamPenalty = spamPenalty,
+            isCritical = matched.any { it in config.criticalTerms },
         )
     }
 

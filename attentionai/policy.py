@@ -92,6 +92,10 @@ class PolicyConfig:
     # --- emergency override (repeated calls from anyone, known or not)
     override_enabled: bool = True
     override_max: float = 0.85
+    # Critical wording ("help", "emergency", ...) bypasses affinity entirely, so a
+    # one-word plea from a stranger still breaks through DND. Only overrides the mute
+    # the same way repeated calls do: explicit instructions downgrade, never silence.
+    critical_override: float = 0.85
 
     # --- thresholds
     interrupt_threshold: float = 0.70
@@ -150,10 +154,16 @@ class NotificationPolicy:
 
         score = clamp01(need * affinity * context_factor)
 
-        override = 0.0
-        if config.override_enabled and escalation.override_factor > 0.0:
-            override = clamp01(escalation.override_factor * config.override_max)
-            score = max(score, override)
+        escalation_override = 0.0
+        critical_override = 0.0
+        critical_hits = [p for p in urgency.matched if p in config.urgency.critical_terms]
+        if config.override_enabled:
+            if escalation.override_factor > 0.0:
+                escalation_override = clamp01(escalation.override_factor * config.override_max)
+            if critical_hits:
+                critical_override = clamp01(config.critical_override)
+        override = max(escalation_override, critical_override)
+        score = max(score, override)
 
         reasons = self._reasons(
             urgency=urgency,
@@ -161,7 +171,8 @@ class NotificationPolicy:
             profile=profile,
             reunion=reunion,
             penalty=penalty,
-            override=override,
+            override=escalation_override,
+            critical_hits=critical_hits,
             event=event,
             at_ms=at_ms,
         )
@@ -296,10 +307,13 @@ class NotificationPolicy:
         reunion: float,
         penalty: float,
         override: float,
+        critical_hits: List[str],
         event: NotificationEvent,
         at_ms: int,
     ) -> List[str]:
         reasons: List[str] = []
+        if critical_hits:
+            reasons.append("critical wording (" + ", ".join(critical_hits) + ")")
         if urgency.score >= 0.7:
             reasons.append("message reads as urgent")
         if urgency.negated and urgency.score < 0.4:

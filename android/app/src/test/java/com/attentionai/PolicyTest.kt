@@ -116,14 +116,42 @@ class PolicyTest {
             receivedCount = 40,
             lastSeenMs = now - 900 * MS_PER_DAY,
         )
-        val decision = policy.analyze(
+        // Critical wording overrides affinity (see `dormant-stranger-genuine-words` in
+        // the corpus), but the reunion gate still holds: no prior closeness means no
+        // dormancy credit at all.
+        val critical = policy.analyze(
             event("emergency, please call me back", UserContext(timeOfDay = "night")),
             stranger,
             EscalationSignal(),
             now,
         )
-        assertEquals(0.0, decision.components["reunion"] ?: -1.0, 1e-9)
-        assertEquals(Action.DEFER, decision.action)
+        assertEquals(0.0, critical.components["reunion"] ?: -1.0, 1e-9)
+        assertEquals(Action.INTERRUPT, critical.action)
+
+        // Urgent-but-not-critical wording ("urgent" is excluded from the critical set)
+        // still respects affinity and stays quiet -- the anti-spam gate is intact.
+        val spammy = policy.analyze(
+            event("URGENT! Claim your prize now, limited time offer", UserContext(timeOfDay = "night")),
+            stranger,
+            EscalationSignal(),
+            now,
+        )
+        assertEquals(Action.DEFER, spammy.action)
+    }
+
+    @Test
+    fun `critical wording from a perfect stranger breaks through DND`() {
+        val stranger = SenderProfile(senderKey = "unknown-number", tier = 5, relationshipScore = 0.15)
+        listOf("help", "help me", "need help").forEach { text ->
+            val decision = policy.analyze(
+                event(text, UserContext(timeOfDay = "night", dndActive = true, screenOn = false)),
+                stranger,
+                EscalationSignal(),
+                now,
+            )
+            assertEquals(Action.INTERRUPT, decision.action)
+            assertTrue(decision.reasons.any { it.contains("critical wording") })
+        }
     }
 
     @Test
@@ -140,17 +168,27 @@ class PolicyTest {
     }
 
     @Test
-    fun `muting downgrades but the override still gets through`() {
+    fun `muting downgrades normal traffic but overrides still get through`() {
         val muted = closeFriend(daysAgo = 1).apply { muted = true }
 
+        // Non-critical urgent wording would interrupt un-muted; muting holds it back.
         val urgent = policy.analyze(
-            event("emergency please help me right now", UserContext(timeOfDay = "night")),
+            event("call me back, it is urgent", UserContext(timeOfDay = "night")),
             muted,
             EscalationSignal(),
             now,
         )
         assertEquals(Action.SHOW_SILENTLY, urgent.action)
         assertEquals("muted", urgent.suppressedBy)
+
+        // Critical wording overrides the mute, exactly like repeated calls.
+        val critical = policy.analyze(
+            event("emergency please help me right now", UserContext(timeOfDay = "night")),
+            muted,
+            EscalationSignal(),
+            now,
+        )
+        assertEquals(Action.INTERRUPT, critical.action)
 
         val calling = policy.analyze(
             event("", UserContext(timeOfDay = "night"), isMissedCall = true),

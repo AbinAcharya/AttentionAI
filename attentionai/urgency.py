@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 __all__ = [
     "DEFAULT_URGENCY_TERMS",
     "DEFAULT_SPAM_TERMS",
+    "DEFAULT_CRITICAL_TERMS",
     "DEFAULT_NEGATORS",
     "UrgencyConfig",
     "UrgencySignal",
@@ -52,6 +53,7 @@ DEFAULT_URGENCY_TERMS: Dict[str, float] = {
     "need your help": 0.85,
     "please help": 0.9,
     "help me": 0.9,
+    "help": 0.9,   # terse appeals match "help me": affinity still gates the sender
     "sos": 1.0,
     # time pressure
     "urgent": 0.8,
@@ -75,7 +77,6 @@ DEFAULT_URGENCY_TERMS: Dict[str, float] = {
     "मदद": 0.9,
     "जल्दी": 0.7,
     # standalone words that are only mildly informative
-    "help": 0.6,
     "please": 0.15,
     "important": 0.4,
     "problem": 0.35,
@@ -105,6 +106,28 @@ DEFAULT_SPAM_TERMS: Dict[str, float] = {
     "credit card": 0.5,
 }
 
+# Wording that means "someone needs help right now". When any of these appears
+# un-negated, the policy bypasses affinity entirely: a one-word "help" from a
+# stranger breaks through DND. Deliberately excludes ambiguous words ("urgent",
+# "police", "fire", "hospital") that automated and business traffic uses every day,
+# so it does not flag "this is urgent for the deploy" or a news alert.
+DEFAULT_CRITICAL_TERMS: frozenset = frozenset({
+    "help",
+    "help me",
+    "please help",
+    "i need help",
+    "need your help",
+    "emergency",
+    "emergency hai",
+    "sos",
+    "ambulance",
+    "accident",
+    "bleeding",
+    "madad",
+    "आपातकाल",
+    "मदद",
+})
+
 # Tokens that flip the meaning of an urgency term appearing shortly after them.
 DEFAULT_NEGATORS = frozenset({
     "no", "not", "nope", "never", "nothing", "isnt", "isn't", "arent", "aren't",
@@ -126,6 +149,7 @@ class UrgencySignal:
     matched: List[str] = field(default_factory=list)
     negated: List[str] = field(default_factory=list)
     spam_penalty: float = 0.0
+    is_critical: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -133,6 +157,7 @@ class UrgencySignal:
             "matched": list(self.matched),
             "negated": list(self.negated),
             "spam_penalty": self.spam_penalty,
+            "is_critical": self.is_critical,
         }
 
 
@@ -141,6 +166,7 @@ class UrgencyConfig:
     terms: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_URGENCY_TERMS))
     spam_terms: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_SPAM_TERMS))
     negators: frozenset = DEFAULT_NEGATORS
+    critical_terms: frozenset = DEFAULT_CRITICAL_TERMS
     shouting_bonus: float = 0.10
     exclamation_bonus: float = 0.05
     question_bonus: float = 0.05
@@ -229,4 +255,5 @@ def score_text(content: Optional[str], config: Optional[UrgencyConfig] = None) -
         matched=sorted(matched),
         negated=sorted(negated),
         spam_penalty=spam_penalty,
+        is_critical=any(phrase in matched for phrase in config.critical_terms),
     )
