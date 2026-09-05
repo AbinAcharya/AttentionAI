@@ -77,6 +77,7 @@ class MainActivity : ComponentActivity() {
                             Graph.engine.setMuted(key, muted)
                             refreshTick.intValue++
                         },
+                        rebuildChannel = { Graph.breakthrough.ensureChannels(); refreshTick.intValue++ },
                         sendTest = ::sendTestBreakthrough,
                         resetData = {
                             Graph.profileStore.clear()
@@ -93,6 +94,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // If the user just granted DND access, rebuild the channel so the bypass flag
+        // is applied without requiring a manual tap.
+        if (Graph.breakthrough.hasPolicyAccess()) {
+            Graph.breakthrough.ensureChannels()
+        }
         refreshTick.intValue++
     }
 
@@ -201,6 +207,7 @@ data class HomeActions(
     val setSensitivity: (Sensitivity) -> Unit,
     val setTier: (String, Int) -> Unit,
     val setMuted: (String, Boolean) -> Unit,
+    val rebuildChannel: () -> Unit,
     val sendTest: () -> Unit,
     val resetData: () -> Unit,
 )

@@ -61,7 +61,7 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { Spacer(Modifier.height(4.dp)) }
-            item { StatusCard(state) }
+            item { StatusCard(state, actions) }
             if (!state.ready) item { SetupCard(state, actions) }
             item { ControlsCard(state, actions) }
             item { RecentCard(recent) }
@@ -73,7 +73,7 @@ fun HomeScreen(
 }
 
 @Composable
-private fun StatusCard(state: SetupState) {
+private fun StatusCard(state: SetupState, actions: HomeActions) {
     val headline = when {
         !state.enabled -> "Paused"
         !state.ready -> "Setup incomplete"
@@ -84,8 +84,8 @@ private fun StatusCard(state: SetupState) {
         !state.enabled -> "Nothing is being read or posted."
         !state.ready -> "Grant the permissions below — until then, nothing breaks through."
         !state.bypassActive ->
-            "The breakthrough channel cannot bypass DND yet. Reopen this screen after " +
-                "granting Do Not Disturb access and it will be rebuilt."
+            "The breakthrough channel cannot bypass DND yet. Grant Do Not Disturb access " +
+                "in system Settings, then come back — or tap Rebuild channel."
         state.dndActive -> "Do Not Disturb is on. ${state.interruptsRemaining} interrupts left this hour."
         state.onlyDuringDnd -> "Do Not Disturb is off, so nothing is being filtered right now."
         else -> "Filtering everything, DND or not."
@@ -96,6 +96,12 @@ private fun StatusCard(state: SetupState) {
             Text(headline, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
             Text(detail, style = MaterialTheme.typography.bodyMedium)
+            if (state.ready && !state.bypassActive) {
+                Spacer(Modifier.height(12.dp))
+                FilledTonalButton(onClick = actions.rebuildChannel) {
+                    Text("Rebuild channel")
+                }
+            }
         }
     }
 }
