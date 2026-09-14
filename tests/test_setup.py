@@ -619,22 +619,31 @@ class TestAttentionEngine:
         assert engine.get_profile("alice") is None
 
     def test_budget_suppresses(self):
+        # The hourly cap applies to ordinary priority traffic. Emergency overrides
+        # ("help", "emergency", repeated calls) deliberately bypass it -- a repeat
+        # crisis is exactly as urgent as the first -- so this uses tier-1 contacts
+        # sending non-critical "call me back" content that still clears the
+        # interrupt threshold through affinity alone.
         cfg = BudgetConfig(max_interrupts_per_window=1)
         budget = InterruptBudget(cfg)
-        engine = AttentionEngine(budget=budget)
-        # First high-score notification gets through
-        d1 = engine.process(
-            {"app_name": "a", "sender_id": "alice", "content": "emergency call me back"},
-            at_ms=NOW_MS,
-        )
-        # Second from different sender should be suppressed by budget
-        d2 = engine.process(
-            {"app_name": "a", "sender_id": "bob", "content": "emergency call me back"},
-            at_ms=NOW_MS + 100,
-        )
-        if d1.is_interrupt():
-            assert not d2.is_interrupt()
-            assert "hourly_budget_exhausted" in d2.suppressed_by
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JsonProfileStore(Path(tmp) / "profiles.json")
+            engine = AttentionEngine(budget=budget, profile_store=store)
+            for contact in ("alice", "bob"):
+                engine.bootstrap_contact(contact, tier=1, is_starred=True)
+            # First high-score notification gets through
+            d1 = engine.process(
+                {"app_name": "a", "sender_id": "alice", "content": "call me back"},
+                at_ms=NOW_MS,
+            )
+            # Second from different sender should be suppressed by budget
+            d2 = engine.process(
+                {"app_name": "a", "sender_id": "bob", "content": "call me back"},
+                at_ms=NOW_MS + 100,
+            )
+            if d1.is_interrupt():
+                assert not d2.is_interrupt()
+                assert "hourly_budget_exhausted" in d2.suppressed_by
 
     def test_attentionai_engine_alias(self):
         assert AttentionEngine is not None

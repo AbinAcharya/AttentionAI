@@ -14,7 +14,7 @@ from attentionai import (
     JsonProfileStore,
     NotificationPolicy,
 )
-from attentionai.models import MS_PER_DAY, InteractionProfile
+from attentionai.models import INTERRUPT, MS_PER_DAY, SHOW_SILENTLY, InteractionProfile
 from attentionai.privacy import hash_contact_id, is_hashed, new_salt
 
 NOW = 1_767_225_600_000
@@ -238,3 +238,72 @@ def test_escalation_state_accumulates_across_calls(tmp_path: Path) -> None:
         fourth = engine.process(payload, at_ms=NOW + index * 30_000)
 
     assert fourth.priority_score > first.priority_score
+
+
+# --- regression: budget must not de-duplicate a repeated emergency -----------
+
+
+def _raising_profile(store: JsonProfileStore, sender_id: str, score: float = 0.95) -> None:
+    """Give a sender tier-1 closeness so ordinary urgency can interrupt."""
+    store.save(InteractionProfile(sender_key=sender_id, tier=1, is_starred=True, relationship_score=score))
+
+
+def test_second_help_updating_the_same_notification_interrupts_again(tmp_path: Path) -> None:
+    """The repeat "help" is an update of the same conversation notification, so its
+    dedup key is identical. The budget used to deny it as a duplicate; critical
+    wording must never be rate-limited."""
+    engine = make_engine(tmp_path)
+    payload = {
+        "app_name": "WA",
+        "sender_id": "raj@x.com",
+        "content": "help",
+        "notification_key": "0|com.whatsapp|123|tx",
+    }
+    first = engine.process(payload, at_ms=NOW)
+    second = engine.process(payload, at_ms=NOW + 60_000)
+
+    assert first.action == INTERRUPT
+    assert second.action == INTERRUPT
+
+
+def test_repeated_calls_from_stranger_are_not_budget_denied(tmp_path: Path) -> None:
+    """A stranger's repeated calls open the emergency override, but it ramps:
+    call_count >= 3 opens it (0.6), and it only reaches the 0.70 interrupt
+    threshold at 5 calls (override_factor 1.0 * 0.85 max). Once engaged, a
+    quick repeat must not be held back by the budget dedup/cooldown."""
+    engine = make_engine(tmp_path)
+    base = {
+        "app_name": "WA",
+        "sender_id": "+91-9876543210",
+        "content": "",
+        "is_missed_call": True,
+        "notification_key": "0|com.whatsapp|789|call",
+    }
+    # Build up the burst: calls 1-4 are too few to clear the threshold (0.51, 0.68),
+    # call 5 triggers the override properly.
+    for i in range(5):
+        engine.process(dict(base), at_ms=NOW + i * 30_000)
+
+    # The 6th call (still within the window) must NOT be budget-denied.
+    repeat = engine.process(dict(base), at_ms=NOW + 150_000)
+    assert repeat.action == INTERRUPT
+    assert repeat.suppressed_by is None
+
+
+def test_ordinary_urgent_repeat_still_respects_the_cooldown(tmp_path: Path) -> None:
+    """Back-pressure must survive the fix: only the emergency override is exempted,
+    ordinary (non-critical) urgency still gets held back on a quick repeat."""
+    engine = make_engine(tmp_path)
+    _raising_profile(engine.profile_store, "raj@x.com")
+    payload = {
+        "app_name": "WA",
+        "sender_id": "raj@x.com",
+        "content": "call me back, it is urgent",
+        "notification_key": "0|com.whatsapp|456|tx",
+    }
+    first = engine.process(payload, at_ms=NOW)
+    second = engine.process(payload, at_ms=NOW + 60_000)
+
+    assert first.action == INTERRUPT
+    assert second.action == SHOW_SILENTLY
+    assert second.suppressed_by is not None

@@ -293,6 +293,16 @@ class AttentionEngine:
             self.budget.note_shown(dedup_key, at_ms)
             return decision
 
+        # A genuine emergency must never be de-duplicated, rate-limited or cooled
+        # down: the second "help" is exactly as urgent as the first. Overrides
+        # (critical wording, repeated calls) cap at 0.85 -- *below* the budget's
+        # 0.90 bypass -- so they were being held back while ordinary high-affinity
+        # traffic swept past. We still commit() so normal traffic from the same
+        # sender keeps its back-pressure once the emergency has passed.
+        if decision.components.get("override", 0.0) > 0:
+            self.budget.commit(key, at_ms, dedup_key)
+            return decision
+
         verdict = self.budget.check(key, decision.priority_score, at_ms, dedup_key)
         if verdict.allowed:
             self.budget.commit(key, at_ms, dedup_key)

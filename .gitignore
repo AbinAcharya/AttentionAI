@@ -27,6 +27,11 @@ android/.kotlin/
 *.aab
 *.ap_
 
+# --- ADB / device debug captures -------------------------------------------
+dumpsys_*.txt
+screen_*.png
+ui.xml
+
 # --- IDE / editor ----------------------------------------------------------
 .idea/
 *.iml

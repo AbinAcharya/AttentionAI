@@ -69,6 +69,17 @@ class AttentionEngine(
             return decision
         }
 
+        // A genuine emergency must never be de-duplicated, rate-limited or cooled
+        // down: the second "help" is exactly as urgent as the first. Overrides
+        // (critical wording, repeated calls) cap at 0.85 -- *below* the budget's
+        // 0.90 bypass -- so they were being held back while ordinary high-affinity
+        // traffic swept past. We still commit() so normal traffic from the same
+        // sender keeps its back-pressure once the emergency has passed.
+        if ((decision.components["override"] ?: 0.0) > 0.0) {
+            budget.commit(key, atMs, dedupKey)
+            return decision
+        }
+
         val verdict = budget.check(key, decision.priorityScore, atMs, dedupKey)
         if (verdict.allowed) {
             budget.commit(key, atMs, dedupKey)

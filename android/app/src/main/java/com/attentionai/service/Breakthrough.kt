@@ -9,11 +9,14 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.attentionai.R
 import com.attentionai.core.Decision
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The actual breakthrough mechanism.
@@ -39,6 +42,12 @@ class Breakthrough(context: Context) {
         appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     private val prefs =
         appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** Latest breakthrough id per sender, so a repeat plea retires the previous one. */
+    private val activeBySender = ConcurrentHashMap<String, Int>()
+
+    /** Fresh id per post: Android will not re-alert a same-id update (ColorOS especially). */
+    private val idCounter = AtomicInteger(1000)
 
     /** True once the user has granted Do Not Disturb access. */
     fun hasPolicyAccess(): Boolean =
@@ -109,10 +118,24 @@ class Breakthrough(context: Context) {
         decision: Decision,
         original: Notification?,
     ) {
-        if (!canPostNotifications()) return
+        if (!canPostNotifications()) {
+            Log.w(TAG, "post dropped: POST_NOTIFICATIONS not granted")
+            return
+        }
         ensureChannels()
 
-        val notificationId = notificationIdFor(senderKey)
+        // A stable per-sender id made repeated pleas silent: posting to an id that is
+        // already in the shade reads as an *update*, and ColorOS will not re-alert an
+        // update. Every breakthrough gets a fresh id -- and the one it replaces is
+        // retired first -- so each plea alerts while the shade never stacks more than
+        // one per sender. A unique group key per alert also keeps the ranker from
+        // bundling breakthroughs into its own summary, which was swallowing the sound.
+        val notificationId = idCounter.incrementAndGet()
+        val previous = activeBySender.put(senderKey, notificationId)
+        if (previous != null) runCatching { manager.cancel(previous) }
+
+        Log.i(TAG, "post id=$notificationId sender=$senderKey bypass=${bypassActive()} channel=${channelId()}")
+
         val builder = NotificationCompat.Builder(appContext, channelId())
             .setSmallIcon(R.drawable.ic_breakthrough)
             .setContentTitle(senderName)
@@ -124,6 +147,8 @@ class Breakthrough(context: Context) {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setAutoCancel(true)
             .setOnlyAlertOnce(false)
+            .setGroup("attentionai-bt-$notificationId")
+            .setGroupSummary(false)
             .setDeleteIntent(feedbackIntent(FeedbackReceiver.ACTION_DISMISSED, senderKey, notificationId))
             .addAction(
                 0,
@@ -140,11 +165,22 @@ class Breakthrough(context: Context) {
 
         runCatching {
             NotificationManagerCompat.from(appContext).notify(notificationId, builder.build())
-        }
+        }.onFailure { Log.w(TAG, "notify failed id=$notificationId", it) }
+            .onSuccess { Log.i(TAG, "notify ok id=$notificationId") }
     }
 
     fun cancel(notificationId: Int) {
         runCatching { NotificationManagerCompat.from(appContext).cancel(notificationId) }
+    }
+
+    /**
+     * Retire the breakthrough currently in the shade for a sender, without needing to
+     * know its id. Used when the original notification that triggered the mirror goes
+     * away, so the shade does not keep a stale duplicate around.
+     */
+    fun cancelFor(senderKey: String) {
+        val id = activeBySender.remove(senderKey) ?: return
+        runCatching { NotificationManagerCompat.from(appContext).cancel(id) }
     }
 
     private fun reasonLine(decision: Decision): String {
@@ -172,13 +208,10 @@ class Breakthrough(context: Context) {
     private fun channelId(): String = "$CHANNEL_BREAKTHROUGH_BASE${generation()}"
 
     companion object {
+        private const val TAG = "AttentionBreakthrough"
         private const val PREFS = "attentionai_channels"
         private const val KEY_GENERATION = "breakthrough_generation"
         private const val CHANNEL_BREAKTHROUGH_BASE = "attentionai_breakthrough_v"
         const val CHANNEL_STATUS = "attentionai_status"
-
-        /** Stable per sender, so a repeat from the same person updates in place. */
-        fun notificationIdFor(senderKey: String): Int =
-            (senderKey.hashCode() and 0x7FFFFFFF) % 100_000 + 1000
     }
 }

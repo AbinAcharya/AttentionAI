@@ -40,6 +40,11 @@ class AttentionListenerService : NotificationListenerService() {
         if (!Graph.settings.enabled) return
         if (!NotificationExtractor.shouldConsider(sbn)) return
 
+        // Debugging aid for the "second help is silent" report: shows whether the
+        // OEM actually delivers an *update* to an existing notification to the
+        // listener at all (some skins replay it, some don't).
+        Log.i(TAG, "onNotificationPosted ${sbn.packageName} key=${sbn.key} rePost=${sbn.isClearable}")
+
         runCatching { handle(sbn, rankingMap) }
             .onFailure { Log.w(TAG, "failed to handle ${sbn.packageName}", it) }
     }
@@ -56,7 +61,7 @@ class AttentionListenerService : NotificationListenerService() {
 
         // Clear our mirror when the real one goes away, so the shade does not keep a
         // stale duplicate around.
-        Graph.breakthrough.cancel(Breakthrough.notificationIdFor(Graph.engine.keyFor(senderId)))
+        Graph.breakthrough.cancelFor(Graph.engine.keyFor(senderId))
 
         if (!Graph.settings.learningEnabled) return
 
@@ -78,11 +83,17 @@ class AttentionListenerService : NotificationListenerService() {
         val context = Graph.contextProvider.current()
         val settings = Graph.settings
 
-        if (settings.onlyDuringDnd && !context.dndActive) return
+        if (settings.onlyDuringDnd && !context.dndActive) {
+            Log.i(TAG, "skip ${sbn.key}: onlyDuringDnd and DND inactive")
+            return
+        }
 
         // If the system is already going to let this alert through the current filter,
         // mirroring it would just be a duplicate buzz.
-        if (alreadyAllowed(sbn, rankingMap)) return
+        if (alreadyAllowed(sbn, rankingMap)) {
+            Log.i(TAG, "skip ${sbn.key}: already allowed by system filter")
+            return
+        }
 
         val event = NotificationExtractor.extract(sbn, context)
         seedFromContacts(event)
@@ -98,9 +109,23 @@ class AttentionListenerService : NotificationListenerService() {
             decision = decision,
         )
 
+        // Decision trace for the "second help is silent" report. No message text is
+        // logged (the service promises text is scored in memory and never persisted).
+        Log.i(
+            TAG,
+            "decision ${sbn.packageName} key=${sbn.key} action=${decision.action} " +
+                "score=${(decision.priorityScore * 100).toInt()} " +
+                "override=${(decision.components["override"] ?: 0.0)} " +
+                "reasons=${decision.reasons.take(3).joinToString("|")} " +
+                "contentLen=${event.content.length}",
+        )
+
         synchronized(processed) { processed[sbn.key] = event.senderId }
 
-        if (!decision.isInterrupt) return
+        if (!decision.isInterrupt) {
+            Log.i(TAG, "not interrupt -> no breakthrough ${sbn.key}")
+            return
+        }
 
         Graph.breakthrough.post(
             senderKey = senderKey,

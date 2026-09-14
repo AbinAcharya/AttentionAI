@@ -20,7 +20,6 @@ import com.attentionai.core.Feedback
 import com.attentionai.core.NotificationEvent
 import com.attentionai.core.SenderProfile
 import com.attentionai.data.Sensitivity
-import com.attentionai.service.Breakthrough
 
 class MainActivity : ComponentActivity() {
 
@@ -211,6 +210,3 @@ data class HomeActions(
     val sendTest: () -> Unit,
     val resetData: () -> Unit,
 )
-
-/** Exposed for the notification-id round trip in tests and previews. */
-internal fun testNotificationId(): Int = Breakthrough.notificationIdFor("attentionai:self-test")
