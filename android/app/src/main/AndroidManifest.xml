@@ -11,6 +11,17 @@
     <!-- Optional: only used to give brand-new senders a sensible starting priority. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!--
+      Battery optimization exemption. Allows the app to request exemption from
+      doze mode so notifications are processed even when screen is off.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!--
+      Wake lock permission for briefly waking CPU when processing critical notifications.
+    -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:name=".AttentionApp"
         android:allowBackup="false"

@@ -1,5 +1,6 @@
 package com.attentionai.service
 
+import android.os.PowerManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -45,8 +46,24 @@ class AttentionListenerService : NotificationListenerService() {
         // listener at all (some skins replay it, some don't).
         Log.i(TAG, "onNotificationPosted ${sbn.packageName} key=${sbn.key} rePost=${sbn.isClearable}")
 
-        runCatching { handle(sbn, rankingMap) }
-            .onFailure { Log.w(TAG, "failed to handle ${sbn.packageName}", it) }
+        // Acquire a brief wake lock to ensure we can process the notification
+        // even if the device is in doze mode with the screen off.
+        val powerManager = applicationContext.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+        val wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "AttentionAI:notification-processing"
+        ).apply {
+            acquire(5000) // Hold for 5 seconds max
+        }
+
+        try {
+            runCatching { handle(sbn, rankingMap) }
+                .onFailure { Log.w(TAG, "failed to handle ${sbn.packageName}", it) }
+        } finally {
+            if (wakeLock.isHeld) {
+                wakeLock.release()
+            }
+        }
     }
 
     override fun onNotificationRemoved(
