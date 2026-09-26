@@ -38,6 +38,35 @@ object UrgencyTerms {
         "help me" to 0.9,
         "help" to 0.9,   // terse appeals match "help me"; affinity still gates the sender
         "sos" to 1.0,
+        // expanded urgency vocabulary - same priority as "help" (0.9)
+        "assist me" to 0.9,
+        "assistance needed" to 0.9,
+        "need assistance" to 0.9,
+        "救命" to 0.9,  // Chinese "help"
+        "ayuda" to 0.9,  // Spanish "help"
+        "ajuda" to 0.9,  // Portuguese "help"
+        "aide" to 0.9,  // French "help"
+        "hilfe" to 0.9,  // German "help"
+        "aiuto" to 0.9,  // Italian "help"
+        "mayday" to 0.9,
+        "crisis" to 0.9,
+        "critical situation" to 0.9,
+        "911" to 0.9,
+        "rescue" to 0.9,
+        "救急" to 0.9,  // Japanese "emergency/help"
+        "in trouble" to 0.9,
+        "need help now" to 0.9,
+        "come quick" to 0.9,
+        "come quickly" to 0.9,
+        "hurry" to 0.9,
+        "get here" to 0.9,
+        "save me" to 0.9,
+        "stuck" to 0.9,
+        "stranded" to 0.9,
+        "please come" to 0.9,
+        "can you come" to 0.9,
+        "danger" to 0.9,
+        "serious problem" to 0.9,
         // time pressure
         "urgent" to 0.8,
         "urgently" to 0.8,
