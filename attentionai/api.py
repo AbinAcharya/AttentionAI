@@ -13,7 +13,7 @@ import os
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 __all__ = [
     "FEEDBACK_OPENED",
@@ -28,20 +28,17 @@ __all__ = [
     "AttentionAIEngine",
 ]
 
-from .budget import BudgetConfig, BudgetVerdict, InterruptBudget
-from .escalation import EscalationConfig, EscalationSignal, EscalationTracker
+from .budget import InterruptBudget
+from .escalation import EscalationTracker
 from .models import (
-    DEFER,
-    INTERRUPT,
     SHOW_SILENTLY,
     Decision,
     InteractionProfile,
     NotificationEvent,
-    UserContext,
     now_ms,
 )
-from .policy import NotificationPolicy, PolicyConfig
-from .privacy import hash_contact_id, is_hashed, new_salt
+from .policy import NotificationPolicy
+from .privacy import hash_contact_id, new_salt
 
 # Feedback kinds, mirroring what a NotificationListenerService can actually observe.
 FEEDBACK_OPENED = "opened"
@@ -98,10 +95,9 @@ class DictNotificationAdapter:
         # must not fall through to the flat-key path (that produced a dict full of
         # None and then crashed on int(None)).
         raw = payload.get("context")
+        source: Dict[str, Any] = payload
         if isinstance(raw, dict):
-            source = raw
-        else:
-            source = payload
+            source = cast(Dict[str, Any], raw)
         return {key: source[key] for key in self._CONTEXT_KEYS if source.get(key) is not None}
 
 
@@ -186,25 +182,39 @@ class JsonProfileStore:
             return
         try:
             with self.path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
+                payload: Any = json.load(handle)
         except (json.JSONDecodeError, OSError):
             self._data = {}
             self._save()
             return
 
-        if isinstance(payload, dict) and "profiles" in payload:
-            self._salt = str(payload.get("salt") or "")
-            self._data = dict(payload.get("profiles") or {})
-        elif isinstance(payload, dict):
-            # Legacy flat layout: {sender_key: profile}
-            self._data = {
-                key: value for key, value in payload.items() if isinstance(value, dict)
-            }
+        if isinstance(payload, dict):
+            payload_dict = cast(Dict[str, Any], payload)
         else:
             self._data = {}
+            return
+
+        if "profiles" in payload_dict:
+            self._salt = str(payload_dict.get("salt") or "")
+            profiles = payload_dict.get("profiles")
+            if isinstance(profiles, dict):
+                self._data = {
+                    str(key): cast(Dict[str, Any], value)
+                    for key, value in cast(Dict[str, Any], profiles).items()
+                    if isinstance(value, dict)
+                }
+            else:
+                self._data = {}
+        else:
+            # Legacy flat layout: {sender_key: profile}
+            self._data = {
+                str(key): cast(Dict[str, Any], value)
+                for key, value in payload_dict.items()
+                if isinstance(value, dict)
+            }
 
     def _save(self) -> None:
-        payload = {"version": 2, "salt": self._salt, "profiles": self._data}
+        payload: Dict[str, Any] = {"version": 2, "salt": self._salt, "profiles": self._data}
         # Atomic write: a half-written profile file on a phone that lost power
         # should not cost the user everything the app has learned.
         directory = self.path.parent
